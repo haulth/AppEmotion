@@ -23,14 +23,15 @@ gpu_options = tf.compat.v1.GPUOptions(per_process_gpu_memory_fraction=0.6)
 sess = tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(gpu_options=gpu_options, log_device_placement=False))
 with sess.as_default():
     pnet, rnet, onet = align.detect_face.create_mtcnn(sess, "align")
-# classifier = Classifier()
-# classifier.load_model()
 
+classifier = Classifier()
+classifier.load_model()
 
 INPUT_IMAGE_SIZE = 96
 MINSIZE = 20
 THRESHOLD = [0.6, 0.7, 0.7]
 FACTOR = 0.709
+
 
 class MainWindown(QMainWindow):
     def __init__(self):
@@ -68,41 +69,40 @@ class live_stream(QThread):
     def run(self):
         self.run_programer()
     def predict_model(self, frame):
-        list_labels = []
-        model = None
-        tf.compat.v1.disable_eager_execution()
-        gpu_options = tf.compat.v1.GPUOptions(per_process_gpu_memory_fraction=0.6)
-        sess = tf.compat.v1.Session(
-        config=tf.compat.v1.ConfigProto(gpu_options=gpu_options, log_device_placement=False))
-        with sess.as_default():
-            pnet, rnet, onet = align.detect_face.create_mtcnn(sess, "align")
-            bounding_boxes, _ = align.detect_face.detect_face(frame, MINSIZE, pnet, rnet, onet, THRESHOLD, FACTOR)
+        bounding_boxes, _ = align.detect_face.detect_face(frame, MINSIZE, pnet, rnet, onet, THRESHOLD, FACTOR)
+        faces_found = bounding_boxes.shape[0]
+        try:
+            if faces_found > 1:
+                cv2.putText(frame, "Only one face", (0, 100), cv2.FONT_HERSHEY_COMPLEX_SMALL,
+                            1, (255, 255, 255), thickness=1, lineType=2)
+            elif faces_found > 0:
+                det = bounding_boxes[:, 0:4]
+                bb = np.zeros((faces_found, 4), dtype=np.int32)
+                for i in range(faces_found):
+                    bb[i][0] = det[i][0]
+                    bb[i][1] = det[i][1]
+                    bb[i][2] = det[i][2]
+                    bb[i][3] = det[i][3]
+                    print(bb[i][3] - bb[i][1])
+                    print(frame.shape[0])
+                    print((bb[i][3] - bb[i][1]) / frame.shape[0])
+                    if ((bb[i][3] - bb[i][1]) / frame.shape[0]) > 0.25:
+                        print("Emotion detected")
+                        cropped = frame[bb[i][1]:bb[i][3], bb[i][0]:bb[i][2], :]
+                        scaled = cv2.resize(cropped, (INPUT_IMAGE_SIZE, INPUT_IMAGE_SIZE),
+                                            interpolation=cv2.INTER_CUBIC)
+                        cv2.imshow('Face ', scaled)
+                        # put rectangle to main image
+                        cv2.rectangle(frame, (bb[i][0], bb[i][1]), (bb[i][2], bb[i][3]), (0, 255, 0), 2)
+                        name = classifier.predict(scaled)
+                        # put name
+                        cv2.putText(frame, name, (bb[i][0], bb[i][1] - 10), cv2.FONT_HERSHEY_COMPLEX_SMALL,
+                                    1, (255, 255, 255), thickness=1, lineType=2)
+                        print("Name: {}".format(name))
 
-            faces_found = bounding_boxes.shape[0]
-            try:
-                if faces_found > 1:
-                    cv2.putText(frame, "Only one face", (0, 100), cv2.FONT_HERSHEY_COMPLEX_SMALL,
-                                1, (255, 255, 255), thickness=1, lineType=2)
-                elif faces_found > 0:
-                    det = bounding_boxes[:, 0:4]
-                    bb = np.zeros((faces_found, 4), dtype=np.int32)
-                    for i in range(faces_found):
-                        bb[i][0] = det[i][0]
-                        bb[i][1] = det[i][1]
-                        bb[i][2] = det[i][2]
-                        bb[i][3] = det[i][3]
-                        print(bb[i][3] - bb[i][1])
-                        print(frame.shape[0])
-                        print((bb[i][3] - bb[i][1]) / frame.shape[0])
-                        if (bb[i][3] - bb[i][1]) / frame.shape[0] > 0.25:
-                            cropped = frame[bb[i][1]:bb[i][3], bb[i][0]:bb[i][2], :]
-                            scaled = cv2.resize(cropped, (INPUT_IMAGE_SIZE, INPUT_IMAGE_SIZE),
-                                                interpolation=cv2.INTER_CUBIC)
-                            scaled = facenet.prewhiten(scaled)
-            except:
-                pass
-        print(scaled)
-        return scaled
+        except:
+            pass
+        return frame
     def get_camera_stream(self):
         return cv2.VideoCapture(0)
     def run_programer(self):
@@ -114,6 +114,7 @@ class live_stream(QThread):
             start_time = time()
             ret, frame = vd.read()
             assert ret
+            frame = self.predict_model(frame)
             end_time = time()
             fps = 1 / (end_time - start_time)
             total_fps += fps
